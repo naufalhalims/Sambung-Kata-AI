@@ -8,6 +8,10 @@ from datetime import datetime
 
 st.set_page_config(page_title="Sambung Kata", page_icon="🔗", layout="centered")
 
+from auth import check_password
+if not check_password():
+    st.stop()
+
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');

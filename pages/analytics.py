@@ -8,6 +8,15 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="Sambung Kata — Analytics", page_icon="📊", layout="wide")
 
+import sys
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
+
+from auth import check_password
+if not check_password():
+    st.stop()
+
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
