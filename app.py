@@ -147,7 +147,9 @@ else:
                 raw_text, ai_words_list = get_ai_responses(word, list(st.session_state.used_words))
                 
                 if not ai_words_list or raw_text.startswith("ERROR"):
-                    st.error("Terjadi masalah pada server API. Mainkan kembali.")
+                    st.error("Terjadi masalah pada server API.")
+                    with st.expander("Detail Error (untuk debugging)"):
+                        st.write(raw_text)
                     st.stop()
                 else:
                     st.session_state.history.append({"role": "assistant", "word": f"**Lawan AI:**\n\n{raw_text}"})
