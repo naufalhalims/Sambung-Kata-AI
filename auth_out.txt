@@ -1,5 +1,0 @@
-HASHER INIT: (self) -> None
-HASHER_HASH: (credentials: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]
-AUTH INIT: (self, credentials: Union[Dict[str, Any], str], cookie_name: str = 'some_cookie_name', cookie_key: str = 'some_key', cookie_expiry_days: float = 30.0, validator: Optional[streamlit_authenticator.utilities.validator.Validator] = None, auto_hash: bool = True, api_key: Optional[str] = None, **kwargs: Optional[Dict[str, Any]]) -> None
-LOGIN: (self, location: Literal['main', 'sidebar', 'unrendered'] = 'main', max_concurrent_users: Optional[int] = None, max_login_attempts: Optional[int] = None, fields: Optional[Dict[str, str]] = None, captcha: bool = False, single_session: bool = False, clear_on_submit: bool = False, key: str = 'Login', callback: Optional[Callable] = None) -> Optional[Tuple[Optional[str], Optional[bool], Optional[str]]]
-LOGOUT: (self, button_name: str = 'Logout', location: Literal['main', 'sidebar', 'unrendered'] = 'main', key: str = 'Logout', use_container_width: bool = False, callback: Optional[Callable] = None) -> None

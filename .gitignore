@@ -7,3 +7,9 @@ __pycache__/
 git_history*.txt
 git_reflog*.txt
 original_app*.py
+
+# Debug / Temp files
+debug_auth.py
+debug_auth2.py
+temp_debug.py
+auth_out.txt
