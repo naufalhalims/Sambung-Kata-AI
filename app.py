@@ -5,6 +5,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime
+from typing import Optional
 
 st.set_page_config(page_title="Sambung Kata", page_icon="🔗", layout="centered")
 
@@ -280,11 +281,43 @@ def save_word_to_dataset(word: str) -> bool:
     except Exception:
         return False
 
-# ─── Dataset Lookup ──────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def build_letter_freq():
+    """Count how many words in the dataset start with each letter."""
+    freq: dict = {}
+    for w in word_set:
+        if w:
+            freq[w[0]] = freq.get(w[0], 0) + 1
+    return freq
+
+_letter_freq: dict = {}
+
+def _get_freq():
+    global _letter_freq
+    if not _letter_freq:
+        _letter_freq = build_letter_freq()
+    return _letter_freq
+
+def word_difficulty_score(word: str) -> float:
+    """Score how 'hard' a word is for the opponent to continue.
+    Words whose last letters are rare word-starters get a higher score.
+    Priority weights: last letter (-1) x3, second-last (-2) x2, third-last (-3) x1."""
+    freq = _get_freq()
+    max_f = max(freq.values()) if freq else 1
+    w = word.upper()
+    score = 0.0
+    for offset, weight in ((1, 3.0), (2, 2.0), (3, 1.0)):
+        if len(w) >= offset:
+            rarity = 1.0 - (freq.get(w[-offset], 0) / max_f)
+            score += rarity * weight
+    return score
+
+# --- Dataset Lookup ---
 def find_words_by_prefix(prefix: str, used_words: set) -> list:
     p = prefix.upper()
     candidates = [w for w in word_set if w.startswith(p) and w not in used_words and len(w) > len(p)]
-    random.shuffle(candidates)
+    # Sort by difficulty: words with rarer ending letters come first
+    candidates.sort(key=word_difficulty_score, reverse=True)
     return candidates[:10]
 
 def get_recommendations_from_dataset(last_word: str, used_words: set):
@@ -331,6 +364,21 @@ Format wajib (balas HANYA 3 baris ini):
         return response.text.strip()
     except Exception as e:
         return f"ERROR: {e}"
+
+def validate_word_with_ai(word: str) -> Optional[bool]:
+    """Ask Gemini if `word` is a valid basic Bahasa Indonesia word.
+    Returns True (valid), False (invalid), or None (API error/unavailable)."""
+    prompt = (
+        f'Apakah kata "{word.upper()}" adalah kata dasar Bahasa Indonesia yang valid dan umum digunakan? '
+        f'Jawab HANYA dengan satu kata: "YA" atau "TIDAK".'
+    )
+    try:
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        response = model.generate_content(prompt)
+        answer = response.text.strip().upper()
+        return "YA" in answer
+    except Exception:
+        return None
 
 def parse_ai_response(raw_text: str) -> list:
     labels = ["1 huruf terakhir", "2 huruf terakhir", "3 huruf terakhir"]
@@ -643,6 +691,29 @@ else:
         key=f"turn_input_{cur_idx}_{len(st.session_state.history)}"
     )
 
+    # ── Live suggestion panel ──────────────────────────────────────
+    typed_prefix = "".join(c for c in (word_input or "") if c.isalpha()).upper()
+    if typed_prefix and 1 <= len(typed_prefix) <= 4:
+        live_suggestions = find_words_by_prefix(typed_prefix, st.session_state.used_words)
+        live_suggestions = live_suggestions[:8]  # cap to 8 for UI
+        if live_suggestions:
+            st.markdown(
+                f'<p style="margin:6px 0 4px;font-size:0.78rem;color:#888;">'
+                f'💡 Saran kata berawalan <b>{typed_prefix}</b>:</p>',
+                unsafe_allow_html=True
+            )
+            sug_cols = st.columns(min(len(live_suggestions), 4))
+            for s_i, sug_word in enumerate(live_suggestions):
+                with sug_cols[s_i % 4]:
+                    sug_color = cur_color
+                    if st.button(
+                        sug_word.upper(),
+                        key=f"live_sug_{s_i}_{sug_word}_{len(st.session_state.history)}",
+                        use_container_width=True,
+                    ):
+                        st.session_state['suggested_word'] = sug_word.upper()
+                        st.rerun()
+
     # ── Skip button: visible only on opponent turns (non-player-1) ──
     if cur_idx != 0:
         p1_name = st.session_state.player_names[0]
@@ -687,8 +758,12 @@ else:
         st.session_state.game_ended = True
         st.rerun()
 
-    if word_input:
-        word_clean = "".join(c for c in word_input if c.isalpha()).strip().upper()
+    # Determine the word to process: from suggestion click OR from text input
+    _suggested = st.session_state.pop('suggested_word', None) if 'suggested_word' in st.session_state else None
+    word_to_process = _suggested or (word_input if word_input else None)
+
+    if word_to_process:
+        word_clean = "".join(c for c in word_to_process if c.isalpha()).strip().upper()
         if not word_clean:
             st.warning("⚠️ Kata tidak boleh kosong.")
             st.stop()
@@ -703,9 +778,27 @@ else:
                 starts_display = " / ".join(f"**{s}**" for s in valid_starts)
                 st.info(f"ℹ️ Info: Kata biasanya diawali salah satu dari: {starts_display}. Lanjut memberikan rekomendasi.")
 
-        if not is_valid_kamus(word_clean):
-            st.warning(f"⚠️ Peringatan: **{word_clean}** tidak ditemukan dalam kamus lokal.")
-            # Persist invalid attempt to DB for analytics
+        # --- Kamus check + AI fallback validation ---
+        in_kamus = is_valid_kamus(word_clean)
+        ai_valid = True  # type: Optional[bool]  # assume valid unless kamus miss triggers AI
+
+        if not in_kamus:
+            with st.spinner(f"🤖 Memvalidasi \"{word_clean}\" via AI..."):
+                ai_valid = validate_word_with_ai(word_clean)
+
+            if ai_valid is False:
+                st.error(
+                    f"❌ **{word_clean}** tidak ada di kamus lokal "
+                    f"**dan** AI menilainya bukan kata dasar Bahasa Indonesia yang valid."
+                )
+            elif ai_valid is None:
+                st.warning(f"⚠️ **{word_clean}** tidak ada di kamus lokal. AI tidak bisa memvalidasi saat ini.")
+            else:
+                st.info(f"✅ **{word_clean}** tidak ada di kamus lokal, namun AI menilainya valid.")
+                if save_word_to_dataset(word_clean):
+                    st.session_state.words_added_to_db += 1
+
+            # Record for analytics regardless
             db_record_invalid(
                 game_id     = st.session_state.game_id,
                 turn_number = st.session_state.turn_number,
@@ -724,6 +817,33 @@ else:
             st.session_state.last_word = word_clean
             st.session_state.turn_number += 1
 
+            # Choose word display style based on validity
+            if ai_valid is False:
+                # Red + strikethrough for AI-confirmed invalid words
+                word_display = (
+                    f'<span style="font-size:1.4rem;font-weight:800;letter-spacing:3px;'
+                    f'color:#ef4444;text-decoration:line-through;opacity:0.8;">{word_clean}</span>'
+                    f'<span style="font-size:0.7rem;color:#ef4444;background:#ef444418;'
+                    f'padding:2px 8px;border-radius:10px;border:1px solid #ef44443a;">tidak valid (AI)</span>'
+                )
+            elif not in_kamus and ai_valid is True:
+                # Amber tint for "not in wordlist but AI-approved"
+                word_display = (
+                    f'<span style="font-size:1.4rem;font-weight:800;letter-spacing:3px;'
+                    f'color:#fbbf24;text-shadow:0 0 12px {cur_color}66;">{word_clean}</span>'
+                    f'<span style="font-size:0.7rem;color:#fbbf24;background:#fbbf2418;'
+                    f'padding:2px 8px;border-radius:10px;border:1px solid #fbbf2444;">valid (AI)</span>'
+                )
+            else:
+                # Normal display
+                word_display = (
+                    f'<span style="font-size:1.4rem;font-weight:800;letter-spacing:3px;'
+                    f'color:#e0e0ff;text-shadow:0 0 12px {cur_color}66;">{word_clean}</span>'
+                    f'<span style="font-size:0.72rem;color:{cur_color};background:{cur_color}18;'
+                    f'padding:2px 10px;border-radius:12px;border:1px solid {cur_color}44;">'
+                    f'awalan {start_used} huruf</span>'
+                )
+
             st.session_state.history.append({
                 "role": "user",
                 "content": (
@@ -731,14 +851,11 @@ else:
                     f'<span style="color:{cur_color};font-weight:700;font-size:0.85rem;'
                     f'background:{cur_color}18;padding:3px 12px;border-radius:20px;'
                     f'border:1px solid {cur_color}44;">{cur_name}</span>'
-                    f'<span style="font-size:1.4rem;font-weight:800;letter-spacing:3px;'
-                    f'color:#e0e0ff;text-shadow:0 0 12px {cur_color}66;">{word_clean}</span>'
-                    f'<span style="font-size:0.72rem;color:{cur_color};background:{cur_color}18;'
-                    f'padding:2px 10px;border-radius:12px;border:1px solid {cur_color}44;">'
-                    f'awalan {start_used} huruf</span>'
+                    f'{word_display}'
                     f'</div>'
                 ),
             })
+
 
             next_idx   = (cur_idx + 1) % st.session_state.num_players
             next_name  = st.session_state.player_names[next_idx]

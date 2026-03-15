@@ -3,6 +3,7 @@ import os
 
 try:
     import streamlit_authenticator as stauth
+    from streamlit_authenticator.utilities.exceptions import LoginError
 except ImportError:
     st.error("Modul `streamlit-authenticator` belum diinstal. Jalankan: `pip install streamlit-authenticator`")
     st.stop()
@@ -44,10 +45,10 @@ def check_password():
     try:
         authenticator = stauth.Authenticate(
             credentials,
-            'sambung_kata_cookie',
+            'sambung_kata_v2',          # Changed name forces fresh cookie, avoids stale token
             'sambung_kata_secret_key',
             30,
-            auto_hash=False # Since we pre-hashed in cache_data
+            auto_hash=False
         )
     except Exception as e:
         st.error(f"Error inisialisasi Authenticator: {e}")
@@ -83,9 +84,16 @@ def check_password():
         with col2:
             try:
                 authenticator.login()
+            except LoginError:
+                # Stale / invalid cookie token — reset and let user login fresh
+                st.session_state['authentication_status'] = None
+                st.rerun()
             except TypeError:
                 try:
                     authenticator.login('Login', 'main')
+                except LoginError:
+                    st.session_state['authentication_status'] = None
+                    st.rerun()
                 except Exception:
                     pass
                     
