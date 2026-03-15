@@ -437,14 +437,7 @@ def validate_word_input(word: str, last_word: str, used_words: set) -> list[str]
     if not word:
         errors.append("Kata tidak boleh kosong.")
         return errors
-    if word in used_words:
-        errors.append(f"Kata **{word}** sudah pernah dipakai!")
-        return errors
-    if last_word:
-        valid_starts = get_valid_starts(last_word)
-        if not any(word.startswith(s) for s in valid_starts):
-            starts_display = " / ".join(f"**{s}**" for s in valid_starts)
-            errors.append(f"Kata harus diawali salah satu dari: {starts_display}")
+    # Validation is now non-blocking and handled in the main loop to support fast tracking
     return errors
 
 def is_valid_kamus(word: str) -> bool:
@@ -638,18 +631,49 @@ else:
         )
 
     # Input form
-    with st.form(f"turn_form_{cur_idx}_{len(st.session_state.history)}", clear_on_submit=True):
-        if st.session_state.last_word:
-            starts = get_valid_starts(st.session_state.last_word)
-            placeholder = f"Awali dengan: {' / '.join(starts)}"
-        else:
-            placeholder = "Kata pertama bebas..."
+    if st.session_state.last_word:
+        starts = get_valid_starts(st.session_state.last_word)
+        placeholder = f"Awali dengan: {' / '.join(starts)} (opsional)"
+    else:
+        placeholder = "Kata pertama bebas..."
 
-        word_input = st.text_input(
-            f"✍️ Kata {cur_name}",
-            placeholder=placeholder,
+    word_input = st.text_input(
+        f"✍️ Kata {cur_name}",
+        placeholder=placeholder,
+        key=f"turn_input_{cur_idx}_{len(st.session_state.history)}"
+    )
+
+    # ── Skip button: visible only on opponent turns (non-player-1) ──
+    if cur_idx != 0:
+        p1_name = st.session_state.player_names[0]
+        p1_color = player_color(0)
+        st.markdown(
+            f'<div style="margin-top:4px;margin-bottom:0;">'
+            f'<p style="text-align:center;font-size:0.78rem;color:#555;margin:0;">'
+            f'Giliran lawan terlalu cepat di in-game?</p></div>',
+            unsafe_allow_html=True
         )
-        submitted = st.form_submit_button("Mainkan →", use_container_width=True, type="primary")
+        if st.button(
+            f"⏭️ Skip → Kembali ke {p1_name}",
+            use_container_width=True,
+            key=f"skip_btn_{cur_idx}_{len(st.session_state.history)}"
+        ):
+            # Log skip action in chat history (as a system note)
+            st.session_state.history.append({
+                "role": "user",
+                "content": (
+                    f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+                    f'<span style="color:{cur_color};font-weight:700;font-size:0.85rem;'
+                    f'background:{cur_color}18;padding:3px 12px;border-radius:20px;'
+                    f'border:1px solid {cur_color}44;">{cur_name}</span>'
+                    f'<span style="font-size:0.82rem;color:#888;font-style:italic;">'
+                    f'giliran di-skip (musuh terlalu cepat)</span>'
+                    f'</div>'
+                ),
+            })
+            # Jump directly back to player 1 (idx 0)
+            st.session_state.current_player_idx = 0
+            st.rerun()
 
     # End game button — visible in main area
     st.markdown(
@@ -663,21 +687,24 @@ else:
         st.session_state.game_ended = True
         st.rerun()
 
-    if submitted:
+    if word_input:
         word_clean = "".join(c for c in word_input if c.isalpha()).strip().upper()
-        errors = validate_word_input(word_clean, st.session_state.last_word, st.session_state.used_words)
+        if not word_clean:
+            st.warning("⚠️ Kata tidak boleh kosong.")
+            st.stop()
 
-        if errors:
-            for err in errors:
-                st.error(f"⚠️ {err}")
+        # Validation (Visual warning only, no blocking)
+        if word_clean in st.session_state.used_words:
+            st.warning(f"⚠️ Peringatan: Kata **{word_clean}** sudah pernah dipakai!")
+        
+        if st.session_state.last_word:
+            valid_starts = get_valid_starts(st.session_state.last_word)
+            if not any(word_clean.startswith(s) for s in valid_starts):
+                starts_display = " / ".join(f"**{s}**" for s in valid_starts)
+                st.info(f"ℹ️ Info: Kata biasanya diawali salah satu dari: {starts_display}. Lanjut memberikan rekomendasi.")
 
-        elif not is_valid_kamus(word_clean):
-            # Word passes letter rules but is NOT in KBBI dictionary → chain reset
-            prev_word = st.session_state.last_word or "-"
-            st.error(
-                f"❌ **{word_clean}** tidak ditemukan dalam kamus! "
-                f"Rantai kata direset — {cur_name} bisa memulai dengan kata bebas."
-            )
+        if not is_valid_kamus(word_clean):
+            st.warning(f"⚠️ Peringatan: **{word_clean}** tidak ditemukan dalam kamus lokal.")
             # Persist invalid attempt to DB for analytics
             db_record_invalid(
                 game_id     = st.session_state.game_id,
@@ -687,26 +714,8 @@ else:
                 word_tried  = word_clean,
                 prev_word   = st.session_state.last_word,
             )
-            # Log invalid attempt in history
-            st.session_state.history.append({
-                "role": "user",
-                "content": (
-                    f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
-                    f'<span style="color:{cur_color};font-weight:700;font-size:0.85rem;'
-                    f'background:{cur_color}18;padding:3px 12px;border-radius:20px;'
-                    f'border:1px solid {cur_color}44;">{cur_name}</span>'
-                    f'<span style="font-size:1.1rem;font-weight:700;color:#ef4444;'
-                    f'text-decoration:line-through;letter-spacing:2px;opacity:0.7;">{word_clean}</span>'
-                    f'<span style="font-size:0.72rem;color:#ef4444;background:#ef444418;'
-                    f'padding:2px 10px;border-radius:12px;border:1px solid #ef44443a;">'
-                    f'tidak valid — rantai reset</span>'
-                    f'</div>'
-                ),
-            })
-            # Reset chain so next attempt is constraint-free
-            st.session_state.last_word = None
-            st.rerun()
-        else:
+
+        if True:
             # Determine which start was used
             start_used = which_start_used(word_clean, st.session_state.last_word) \
                          if st.session_state.last_word else "1"

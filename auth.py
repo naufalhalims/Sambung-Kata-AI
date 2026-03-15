@@ -1,49 +1,99 @@
 import streamlit as st
 import os
 
+try:
+    import streamlit_authenticator as stauth
+except ImportError:
+    st.error("Modul `streamlit-authenticator` belum diinstal. Jalankan: `pip install streamlit-authenticator`")
+    st.stop()
+
 def check_password():
-    """Mengembalikan True jika password benar. 
-    Akan menghentikan app jika belum login."""
+    """Mengembalikan True jika user sudah login via Username & Password."""
     
-    def password_entered():
-        # Baca password dari Environment Variable (lokal) atau Streamlit Secrets (Cloud)
-        secret_pass = os.environ.get("APP_PASSWORD", "sambung123")
+    # Mengambil kredensial dari secrets.toml (prioritas utama)
+    # Jika tidak ada, gunakan nilai default "admin" dan "sambung123"
+    try:
+        expected_user = st.secrets["APP_USERNAME"]
+    except Exception:
+        expected_user = os.environ.get("APP_USERNAME", "admin")
         
-        # Jika menggunakan Streamlit Secrets via dashboard (saat di deploy)
-        if hasattr(st, "secrets") and "APP_PASSWORD" in st.secrets:
-            secret_pass = st.secrets["APP_PASSWORD"]
-            
-        if st.session_state["password_input"] == secret_pass:
-            st.session_state["password_correct"] = True
-            del st.session_state["password_input"]  # Hapus dari memori untuk keamanan
-        else:
-            st.session_state["password_correct"] = False
+    try:
+        expected_pass = st.secrets["APP_PASSWORD"]
+    except Exception:
+        expected_pass = os.environ.get("APP_PASSWORD", "sambung123")
+        
+    @st.cache_data
+    def get_credentials(user, pwd):
+        # Build the credentials dict with plain password
+        credentials = {
+            'usernames': {
+                user: {
+                    'email': f'{user}@example.com',
+                    'name': user.capitalize(),
+                    'password': pwd
+                }
+            }
+        }
+        # Hash it correctly using v0.4.x API
+        # hash_passwords modifies the dict or returns the new one
+        return stauth.Hasher.hash_passwords(credentials)
+        
+    credentials = get_credentials(expected_user, expected_pass)
+    
+    # Inisialisasi authenticator (cookie expiry 30 hari)
+    try:
+        authenticator = stauth.Authenticate(
+            credentials,
+            'sambung_kata_cookie',
+            'sambung_kata_secret_key',
+            30,
+            auto_hash=False # Since we pre-hashed in cache_data
+        )
+    except Exception as e:
+        st.error(f"Error inisialisasi Authenticator: {e}")
+        st.stop()
 
-    if st.session_state.get("password_correct", False):
-        return True
-
-    # Styling sederhana untuk login form
     st.markdown("""
         <style>
         .login-box {
             background-color: #1a1a2e; padding: 2rem; border-radius: 12px;
             border: 1px solid #2d2d5e; box-shadow: 0 4px 12px #0005;
-            text-align: center; max-width: 400px; margin: 40px auto;
+            text-align: center; max-width: 400px; margin: 40px auto 10px auto;
         }
         </style>
     """, unsafe_allow_html=True)
     
-    st.markdown('<div class="login-box"><h2>🔒 Private Access</h2><p>Aplikasi ini dikunci sementara.</p></div>', unsafe_allow_html=True)
+    auth_status = st.session_state.get('authentication_status')
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.text_input(
-            "Masukkan Password", 
-            type="password", 
-            on_change=password_entered, 
-            key="password_input"
-        )
-        if "password_correct" in st.session_state and not st.session_state["password_correct"]:
-            st.error("❌ Password salah!")
-            
-    return False
+    if auth_status:
+        st.sidebar.markdown("---")
+        st.sidebar.markdown(f"👤 **User:** {st.session_state.get('name', expected_user)}")
+        with st.sidebar:
+            try:
+                authenticator.logout(location='sidebar')
+            except Exception:
+                try:
+                    authenticator.logout('Logout', 'main')
+                except Exception:
+                    authenticator.logout()
+        return True
+    else:
+        st.markdown('<div class="login-box"><h2>🔒 Login</h2><p>Aplikasi ini dikunci sementara.</p></div>', unsafe_allow_html=True)
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            try:
+                authenticator.login()
+            except TypeError:
+                try:
+                    authenticator.login('Login', 'main')
+                except Exception:
+                    pass
+                    
+        if st.session_state.get('authentication_status') is False:
+            with col2:
+                st.error('❌ Username atau Password salah')
+        elif st.session_state.get('authentication_status') is None:
+            with col2:
+                st.warning('⚠️ Silakan masukkan Username dan Password Anda')
+                
+        return False
