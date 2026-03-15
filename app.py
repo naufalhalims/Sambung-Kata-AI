@@ -1,9 +1,8 @@
 import streamlit as st
 import google.generativeai as genai
 
-st.set_page_config(page_title="AI Sambung Kata", page_icon="📝", layout="centered")
+st.set_page_config(page_title="Rekomendasi Kata AI", page_icon="📝", layout="centered")
 
-# --- UI Styles ---
 st.markdown("""
 <style>
     .game-title { text-align: center; color: #2e7d32; font-family: 'Inter', sans-serif; font-weight: 800; font-size: 2.5rem; margin-bottom: 0px;}
@@ -11,14 +10,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="game-title">📝 Sambung Kata AI</p>', unsafe_allow_html=True)
-st.markdown('<p class="game-subtitle">Lawan Gemini AI dalam permainan kata tak terbatas!</p>', unsafe_allow_html=True)
+st.markdown('<p class="game-title">📝 Rekomendasi Sambung Kata</p>', unsafe_allow_html=True)
+st.markdown('<p class="game-subtitle">Masukkan kata Anda & kata lawan, AI akan merekomendasikan jawaban!</p>', unsafe_allow_html=True)
 
-# --- Sidebar Configuration ---
+# --- Sidebar ---
 with st.sidebar:
     st.header("⚙️ Pengaturan")
-    # Mengambil API key dari Streamlit Secrets (untuk deployment awan)
-    # Jika berjalan lokal, ini akan membaca dari .streamlit/secrets.toml
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
     except Exception:
@@ -27,136 +24,164 @@ with st.sidebar:
     if api_key and api_key != "your_api_key_here":
         try:
             genai.configure(api_key=api_key)
-            st.success("✅ API Key berhasil dimuat dari Secrets/sistem!")
-        except Exception as e:
+            st.success("✅ API Key berhasil dimuat!")
+        except Exception:
             st.error("❌ API Key invalid.")
     else:
-        st.warning("⚠️ API Key belum dikonfigurasi. Pastikan mengatur st.secrets saat deploy.")
-    
+        st.warning("⚠️ API Key belum dikonfigurasi.")
+
     st.markdown("---")
-    st.markdown("### 📜 Aturan Main:")
-    st.markdown("1. Mainkan 1 kata saja.")
-    st.markdown("2. Kata selanjutnya **diawali dengan huruf terakhir** dari kata musuh.")
-    st.markdown("3. **Tidak boleh** memakai kata yang sudah dipakai sebelumnya pada sesi game yang sama.")
-    
+    st.markdown("### 📜 Cara Penggunaan")
+    st.markdown("1. Masukkan kata yang **Anda mainkan**.")
+    st.markdown("2. Masukkan kata yang **lawan mainkan**.")
+    st.markdown("3. AI merekomendasikan 3 kata untuk giliran Anda berikutnya.")
+    st.markdown("4. Kata yang sudah dipakai **tidak akan muncul** di rekomendasi.")
+
     st.markdown("---")
-    if st.button("🔄 Reset Permainan", use_container_width=True, type="primary"):
+    if st.button("🔄 Reset Sesi", use_container_width=True, type="primary"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
 
-# --- Initialize Session State ---
+    if "used_words" in st.session_state and st.session_state.used_words:
+        st.markdown("---")
+        st.markdown("### 📋 Kata Terpakai:")
+        st.write(", ".join(sorted(st.session_state.used_words)))
+
+# --- Session State ---
 if "history" not in st.session_state:
     st.session_state.history = []
 if "used_words" not in st.session_state:
     st.session_state.used_words = set()
-if "current_ai_words" not in st.session_state:
-    st.session_state.current_ai_words = []
-if "game_over" not in st.session_state:
-    st.session_state.game_over = False
 
-# --- API Functions ---
-def get_ai_responses(last_word, used_words_list):
-    char_1 = last_word[-1].upper()
-    char_2 = last_word[-2:].upper() if len(last_word) >= 2 else char_1
-    char_3 = last_word[-3:].upper() if len(last_word) >= 3 else char_2
-    used_str = ", ".join(used_words_list)
-    
-    prompt = f"""Kata terakhir dari pemain adalah: "{last_word.upper()}".
+# --- AI Function ---
+def get_recommendations(opponent_word, used_words_set):
+    char_1 = opponent_word[-1].upper()
+    char_2 = opponent_word[-2:].upper() if len(opponent_word) >= 2 else char_1
+    char_3 = opponent_word[-3:].upper() if len(opponent_word) >= 3 else char_2
+    used_str = ", ".join(sorted(used_words_set)) if used_words_set else "kosong"
 
-Tugasmu memberikan 3 jawaban kata dasar Bahasa Indonesia sekaligus sebagai balasan. Aturannya:
-1. Kata TIDAK BOLEH ada di daftar kata yang sudah dipakai ini: [{used_str}].
-2. Format yang HARUS diberikan:
-   1 HURUF: [Kata yang berawalan "{char_1}"]
-   2 HURUF: [Kata yang berawalan "{char_2}"] (Jika sangat sulit/tidak ada, ganti pakai awalan "{char_1}")
-   3 HURUF: [Kata yang berawalan "{char_3}"] (Jika sangat sulit/tidak ada, ganti pakai awalan "{char_1}")
+    prompt = f"""Kata terakhir lawan: "{opponent_word.upper()}"
+Kata yang sudah dipakai (TIDAK BOLEH direkomendasikan): [{used_str}]
 
-Contoh Jika Pemain="KUCING":
-1 HURUF: GAJAH
-2 HURUF: NGAMUK
-3 HURUF: INGGRIS
+Berikan 3 rekomendasi kata dasar Bahasa Indonesia untuk menjawab kata lawan.
 
-Berikan HANYA 3 baris jawaban di atas tanpa basa-basi, tanpa penjelasan tambahan."""
+Aturan WAJIB:
+- 1 HURUF: berikan 1 kata yang berawalan huruf "{char_1}".
+- 2 HURUF: berikan 1 kata yang berawalan "{char_2}". Jika TIDAK ADA kata Bahasa Indonesia yang berawalan "{char_2}", tulis: "tidak ada kata".
+- 3 HURUF: berikan 1 kata yang berawalan "{char_3}". Jika TIDAK ADA kata Bahasa Indonesia yang berawalan "{char_3}", tulis: "tidak ada kata".
+- DILARANG mengganti awalan ke huruf lain jika tidak ada kata yang sesuai. Harus ditulis "tidak ada kata".
+- Kata rekomendasi TIDAK BOLEH ada di daftar yang sudah dipakai.
+
+Format wajib:
+1 HURUF: [kata atau "tidak ada kata"]
+2 HURUF: [kata atau "tidak ada kata"]
+3 HURUF: [kata atau "tidak ada kata"]
+
+Balas HANYA dengan 3 baris di atas. Tanpa penjelasan."""
 
     try:
         model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
-        text = response.text.strip().upper()
-        
-        words = []
-        for line in text.splitlines():
-            if ":" in line:
-                part = line.split(":", 1)[1]
-            else:
-                part = line
-            w = "".join(c for c in part if c.isalpha() or c.isspace()).strip().split()
-            if w:
-                words.append(w[0])
-            
-        return text.replace('\n', '\n\n'), words
+        return response.text.strip()
     except Exception as e:
-        return f"ERROR: {e}", []
+        return f"ERROR: {e}"
+
+def render_recommendations(raw_text):
+    """Parse AI response and render colored recommendation cards."""
+    colors = ["#2e7d32", "#1565c0", "#e65100"]  # hijau, biru, oranye
+    labels = ["1 huruf terakhir", "2 huruf terakhir", "3 huruf terakhir"]
+    lines = [l.strip() for l in raw_text.strip().splitlines() if l.strip()]
+
+    cards_html = '<div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">'
+    for i, line in enumerate(lines[:3]):
+        # Ambil kata setelah ":"
+        word = line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+        color = colors[i] if i < len(colors) else "#555"
+        label = labels[i] if i < len(labels) else ""
+
+        if word.lower() == "tidak ada kata" or not word:
+            cards_html += f'''
+            <div style="
+                background:#f0f0f0; border-left:4px solid #bbb;
+                border-radius:8px; padding:10px 16px;
+                color:#999; font-style:italic; font-size:0.9rem;">
+                <span style="font-size:0.75rem; display:block; margin-bottom:2px;">{label}</span>
+                tidak ada kata
+            </div>'''
+        else:
+            cards_html += f'''
+            <div style="
+                background:{color}18; border-left:4px solid {color};
+                border-radius:8px; padding:10px 16px;
+                color:{color}; font-weight:700; font-size:1.1rem; letter-spacing:1px;">
+                <span style="font-size:0.75rem; font-weight:400; display:block; margin-bottom:2px; opacity:0.8;">{label}</span>
+                {word}
+            </div>'''
+    cards_html += '</div>'
+    return cards_html
 
 # --- Main UI ---
 for msg in st.session_state.history:
     with st.chat_message(msg["role"]):
-        st.write(msg["word"])
-
-if st.session_state.game_over:
-    st.error("🏁 Permainan Berakhir! Silakan tekan tombol 'Reset Permainan' di sidebar untuk mulai ulang.")
-else:
-    if not api_key:
-        st.info("👈 Silakan masukkan API Key Google Gemini Anda di sidebar sebelah kiri untuk mulai permainan.")
-    else:
-        if st.session_state.current_ai_words:
-            allowed_chars = list(set([w[-1].upper() for w in st.session_state.current_ai_words if w]))
-            last_char_msg = " ATAU ".join(allowed_chars)
-            st.info(f"Giliran Anda! Kata selanjutnya bebas berawalan huruf: **{last_char_msg}**")
+        if msg.get("is_recommendation"):
+            st.markdown("**Rekomendasi untuk Anda:**")
+            st.markdown(render_recommendations(msg["content"]), unsafe_allow_html=True)
         else:
-            st.success("Babak Pertama! Giliran Anda, ketik kata apa saja untuk memulai permainan.")
+            st.markdown(msg["content"])
 
-        user_input = st.chat_input("Ketikkan tebakan kata Anda di sini...")
-        
-        if user_input:
-            # clean punctuation
-            word = "".join(c for c in user_input if c.isalpha() or c.isspace()).strip().upper()
-            
-            # --- PLAYER VALIDATION ---
-            if " " in word:
-                st.error("⚠️ Masukkan hanya 1 kata (tanpa kalimat/spasi).")
-                st.stop()
-            elif word in st.session_state.used_words:
-                st.error(f"❌ Kata '{word}' sudah dipakai di game ini! Kalian tidak boleh memakai kata berulang. Anda kalah.")
-                st.session_state.history.append({"role": "user", "word": f"~~{word}~~ (KATA SUDAH DIPAKAI)"})
-                st.session_state.game_over = True
-                st.rerun()
-            elif st.session_state.current_ai_words:
-                allowed_chars = list(set([w[-1].upper() for w in st.session_state.current_ai_words if w]))
-                if not any(word.startswith(c) for c in allowed_chars):
-                    st.error(f"❌ Kata '{word}' tidak berawalan salah satu dari {', '.join(allowed_chars)}! Anda kalah.")
-                    st.session_state.history.append({"role": "user", "word": f"~~{word}~~ (SALAH HURUF AWAL)"})
-                    st.session_state.game_over = True
-                    st.rerun()
-            
-            # Input valid
-            st.session_state.used_words.add(word)
-            st.session_state.history.append({"role": "user", "word": f"**Anda:** {word}"})
-            
-            # --- ENEMY (AI) GILIRAN ---
-            with st.spinner("Giliran Musuh (AI) memikirkan 3 kata..."):
-                raw_text, ai_words_list = get_ai_responses(word, list(st.session_state.used_words))
-                
-                if not ai_words_list or raw_text.startswith("ERROR"):
-                    st.error("Terjadi masalah pada server API.")
-                    with st.expander("Detail Error (untuk debugging)"):
-                        st.write(raw_text)
-                    st.stop()
-                else:
-                    st.session_state.history.append({"role": "assistant", "word": f"**Lawan AI:**\n\n{raw_text}"})
-                    st.session_state.current_ai_words = []
-                    
-                    for aw in ai_words_list:
-                        st.session_state.used_words.add(aw)
-                        st.session_state.current_ai_words.append(aw)
-                
+if not api_key:
+    st.info("👈 Masukkan API Key di sidebar untuk mulai.")
+else:
+    st.markdown("---")
+    with st.form("input_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            my_word = st.text_input("✋ Kata Anda", placeholder="Misal: GAJAH")
+        with col2:
+            opp_word = st.text_input("⚔️ Kata Lawan", placeholder="Misal: HARIMAU")
+
+        submitted = st.form_submit_button("Dapatkan Rekomendasi →", use_container_width=True, type="primary")
+
+    if submitted:
+        my_word_clean = "".join(c for c in my_word if c.isalpha()).strip().upper()
+        opp_word_clean = "".join(c for c in opp_word if c.isalpha()).strip().upper()
+
+        errors = []
+        if not my_word_clean:
+            errors.append("Kata Anda tidak boleh kosong.")
+        elif " " in my_word_clean:
+            errors.append("Kata Anda harus 1 kata saja.")
+        elif my_word_clean in st.session_state.used_words:
+            errors.append(f"Kata '**{my_word_clean}**' sudah pernah dipakai!")
+
+        if not opp_word_clean:
+            errors.append("Kata Lawan tidak boleh kosong.")
+        elif " " in opp_word_clean:
+            errors.append("Kata Lawan harus 1 kata saja.")
+        elif opp_word_clean in st.session_state.used_words:
+            errors.append(f"Kata lawan '**{opp_word_clean}**' sudah pernah dipakai!")
+
+        if errors:
+            for err in errors:
+                st.error(f"⚠️ {err}")
+        else:
+            # Tambahkan ke riwayat dan used_words
+            st.session_state.used_words.add(my_word_clean)
+            st.session_state.used_words.add(opp_word_clean)
+
+            st.session_state.history.append({
+                "role": "user",
+                "content": f"**Anda:** {my_word_clean} → **Lawan:** {opp_word_clean}"
+            })
+
+            with st.spinner("AI menyusun rekomendasi..."):
+                result = get_recommendations(opp_word_clean, st.session_state.used_words)
+
+            st.session_state.history.append({
+                "role": "assistant",
+                "content": result,
+                "is_recommendation": True
+            })
+
             st.rerun()
