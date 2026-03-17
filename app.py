@@ -313,12 +313,29 @@ def word_difficulty_score(word: str) -> float:
     return score
 
 # --- Dataset Lookup ---
-def find_words_by_prefix(prefix: str, used_words: set) -> list:
+def find_words_by_prefix(prefix: str, used_words: set, tier: str = "mixed") -> list:
     p = prefix.upper()
     candidates = [w for w in word_set if w.startswith(p) and w not in used_words and len(w) > len(p)]
+    if not candidates:
+        return []
+
     # Sort by difficulty: words with rarer ending letters come first
     candidates.sort(key=word_difficulty_score, reverse=True)
-    return candidates[:10]
+    n = len(candidates)
+
+    if tier == "hard":
+        pool = candidates[:max(5, n // 5)] # Top 20%
+    elif tier == "medium":
+        mid = n // 2
+        pool = candidates[max(0, mid - 5):min(n, mid + 5)] # Middle ~10
+    elif tier == "easy":
+        pool = candidates[-max(5, n // 5):] # Bottom 20%
+    else:
+        pool = candidates # mixed
+
+    # Randomize to break monotony
+    random.shuffle(pool)
+    return pool[:10]
 
 def get_recommendations_from_dataset(last_word: str, used_words: set):
     lw = last_word.upper()
@@ -327,9 +344,10 @@ def get_recommendations_from_dataset(last_word: str, used_words: set):
     char_3 = lw[-3:] if len(lw) >= 3 else char_2
     prefixes = [char_1, char_2, char_3]
     labels   = ["1 huruf terakhir", "2 huruf terakhir", "3 huruf terakhir"]
+    tiers    = ["easy", "medium", "hard"]
     results  = []
-    for label, prefix in zip(labels, prefixes):
-        hits = find_words_by_prefix(prefix, used_words)
+    for label, prefix, tier in zip(labels, prefixes, tiers):
+        hits = find_words_by_prefix(prefix, used_words, tier)
         results.append((label, hits[0] if hits else None, "DATASET"))
     return results  # list of (label, word_or_None, source)
 
@@ -347,9 +365,9 @@ Kata yang sudah dipakai (TIDAK BOLEH direkomendasikan): [{used_str}]
 Berikan 3 rekomendasi kata dasar Bahasa Indonesia.
 
 Aturan WAJIB:
-- 1 HURUF: kata berawalan huruf "{char_1}".
-- 2 HURUF: kata berawalan "{char_2}". Jika TIDAK ADA, tulis: tidak ada kata
-- 3 HURUF: kata berawalan "{char_3}". Jika TIDAK ADA, tulis: tidak ada kata
+- 1 HURUF: kata berawalan huruf "{char_1}". (Pilih kata yang huruf belakangnya UMUM/MUDAH untuk dilanjutkan lawan)
+- 2 HURUF: kata berawalan "{char_2}". Jika TIDAK ADA, tulis: tidak ada kata (Pilih kata yang huruf belakangnya LUMAYAN SULIT)
+- 3 HURUF: kata berawalan "{char_3}". Jika TIDAK ADA, tulis: tidak ada kata (SENJATA UTAMA: Pilih kata yang huruf belakangnya SANGAT SULIT dilanjutkan, seperti V, W, X, Y, Z, Q, F)
 - DILARANG mengganti awalan. Tulis "tidak ada kata" jika kosong.
 - Kata TIDAK BOLEH ada di daftar yang sudah dipakai.
 
